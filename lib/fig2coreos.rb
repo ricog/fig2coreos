@@ -29,6 +29,7 @@ class Fig2CoreOS
 
   def create_service_files
   	@fig.each do |service_name, service|
+      service_name ="#{@app_name}-#{service_name}"
       image = service["image"]
       command = service["command"]
       hostname = if service["hostname"]
@@ -54,13 +55,24 @@ class Fig2CoreOS
       ports = (service["ports"] || []).map{|port| "-p #{port}"}
       volumes = (service["volumes"] || []).map{|volume| "-v #{volume}"}
       volumes_from = (service["volumes_from"] || []).map{|volume_from| "--volumes-from #{volume_from}"}
-      links = (service["links"] || []).map{|link| "--link #{link}_1:#{link}_1"}
+      privileged = service["privileged"]
+      command = service["command"] || ""
+
+      links = (service["links"] || []).map do |link|
+        container_name = link.split(":")[0]
+        container_alias = link.split(":")[1] || "#{container_name}_1"
+
+        "--link #{@app_name}-#{container_name}_1:#{container_alias}"
+      end
+
       envs = (service["environment"] || []).map do |env_name, env_value|
         "-e \"#{env_name}=#{env_value}\""
       end
 
       after = if service["links"]
-        "#{service["links"].last}.1"
+        container_name = service["links"].last.split(":")[0]
+
+        "#{@app_name}-#{container_name}.1"
       else
         "docker"
       end
@@ -79,10 +91,12 @@ After=#{after}.service
 Requires=#{after}.service
 
 [Service]
+User=core
 Restart=always
 RestartSec=10s
+ExecStartPre=/usr/bin/docker pull #{image}
 ExecStartPre=/usr/bin/docker ps -a -q | xargs docker rm
-ExecStart=/usr/bin/docker run --rm --name #{service_name}_1 #{volumes.join(" ")} #{volumes_from.join(" ")} #{links.join(" ")} #{envs.join(" ")} #{ports.join(" ")} #{privileged} #{hostname} #{domainname} #{image} #{command}
+ExecStart=/usr/bin/docker run #{privileged && "--privileged=true"} --rm --name #{service_name}_1 #{volumes.join(" ")} #{volumes_from.join(" ")} #{links.join(" ")} #{envs.join(" ")} #{ports.join(" ")} #{privileged} #{hostname} #{domainname} #{image} #{command}
 ExecStartPost=/usr/bin/docker ps -a -q | xargs docker rm
 ExecStop=/usr/bin/docker kill #{service_name}_1
 ExecStopPost=/usr/bin/docker ps -a -q | xargs docker rm
